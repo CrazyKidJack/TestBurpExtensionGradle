@@ -11,15 +11,23 @@ import com.coreyd97.BurpExtenderUtilities.Preferences;
 import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
-import com.google.gson.JsonParseException;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
 import com.google.gson.reflect.TypeToken;
 
+import javax.swing.BoxLayout;
+import javax.swing.JCheckBox;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.SwingConstants;
+import javax.swing.border.EmptyBorder;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.lang.reflect.Type;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -103,26 +111,39 @@ public class Main implements BurpExtension{
     //////////////////////////////////
     // MULTI-LEVEL PERSISTED OBJECT //
     //////////////////////////////////
+    final boolean CLEAN = true;
+    api.logging().logToOutput(api.persistence().extensionData().getString("extensionSettings"));
+    if(CLEAN) api.persistence().extensionData().deleteString("extensionSettings");
+
     ExtensionSettings extSettings = new ExtensionSettings(api, "extensionSettings", Preferences.Visibility.PROJECT);
+    if(CLEAN){
+      extSettings.unregister();
+      extSettings.reregister();
+    }
     api.logging().logToError("extSettings = \n" + extSettings);
-    extSettings.reset();
-    api.logging().logToError("\n\nextSettings = \n" + extSettings);
-    extSettings.subSettings1().enabled(true);
+    boolean subSettings1Enabled = extSettings.subSettings1().enabled();
+    extSettings.subSettings1().enabled(!subSettings1Enabled);
     api.logging().logToError("\n\nextSettings = \n" + extSettings);
   }
+}
+
+interface PersistedConstituent{
+  public void save();
+  public void reset();
 }
 
 class GsonProvider extends DefaultGsonProvider{
   public GsonProvider(){
     super();
     this.registerTypeHierarchyAdapter(Path.class, new PathGsonifier());
+    this.registerTypeAdapter(TestSwingComponent.class, new TestSwingComponent.TestSwingComponentGsonifier());
   }
 
   static final class PathGsonifier implements JsonDeserializer<Path>, JsonSerializer<Path>{
     @Override
     public Path deserialize(
       JsonElement jsonElement, Type type, JsonDeserializationContext context
-    ) throws JsonParseException{
+    ){
       return Path.of(jsonElement.getAsString());
     }
 
@@ -204,9 +225,10 @@ class Settings2 extends PersistedObject{
 class ExtensionSettings extends PersistedObject{
   private SubSettings1 subSettings1 = new SubSettings1(this);
   private SubSettings2 subSettings2 = new SubSettings2(this);
+  private TestSwingComponent testComponent = new TestSwingComponent(this);
 
   public ExtensionSettings(MontoyaApi api, String name, Preferences.Visibility vis){
-    super(api, name, vis);
+    super(api, new GsonProvider(), name, vis);
     this.register();
     _loadFromPrefs();
   }
@@ -224,7 +246,9 @@ class ExtensionSettings extends PersistedObject{
       "subSettings1 = \n" +
       subSettings1.toString() + "\n" +
       "\nsubSettings2 = \n" +
-      subSettings2.toString();
+      subSettings2.toString() + "\n" +
+      "\ntestComponent = \n" +
+      testComponent.toString();
     return str;
   }
 
@@ -232,8 +256,9 @@ class ExtensionSettings extends PersistedObject{
 
   private void _loadFromPrefs(){
     ExtensionSettings persistedSelf = _prefs.get(_PERSISTED_NAME);
-    subSettings1 = new SubSettings1(this, persistedSelf.subSettings1);
-    subSettings2 = new SubSettings2(this, persistedSelf.subSettings2);
+    subSettings1  = new SubSettings1(this, persistedSelf.subSettings1);
+    subSettings2  = new SubSettings2(this, persistedSelf.subSettings2);
+    testComponent = new TestSwingComponent(this, persistedSelf.testComponent);
   }
 }
 
@@ -330,4 +355,131 @@ class SubSubSettings{
   }
 
   private final transient PersistedObject _manager;
+}
+
+class TestSwingComponent extends JPanel implements PersistedConstituent{
+  //public members accessible via functions of same name
+  private final JCheckBox  gifFileType = _createOptionCheckBox(_GIF);
+  private final JCheckBox  pngFileType = _createOptionCheckBox(_PNG);
+  private final JTextField throttleValue = new JTextField(_STD_JTEXT_COLS);
+
+  public TestSwingComponent(PersistedObject manager){
+    _manager = manager;
+
+    setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+    setBorder(new EmptyBorder(10, 10, 10, 10));
+    this.add(gifFileType);
+    this.add(pngFileType);
+    this.add(_getThrottleTimeGroup());
+  }
+  public TestSwingComponent(PersistedObject manager, TestSwingComponent source){
+    this(manager);
+
+    gifFileType.setSelected(source.gifFileType.isSelected());
+    pngFileType.setSelected(source.pngFileType.isSelected());
+    throttleValue.setText(  source.throttleValue.getText());
+  }
+
+  public boolean gifFileType(){ return gifFileType.isSelected(); }
+  public boolean gifFileType(boolean enable){
+    gifFileType.setSelected(enable);
+    return gifFileType();
+  }
+
+  public boolean pngFileType(){ return pngFileType.isSelected(); }
+  public boolean pngFileType(boolean enable){
+    pngFileType.setSelected(enable);
+    return pngFileType();
+  }
+
+  public String throttleValue(){ return throttleValue.getText(); }
+  public String throttleValue(String newVal){
+    throttleValue.setText(newVal);
+    return throttleValue();
+  }
+
+  public void reset(){
+    gifFileType.setSelected(true);
+    pngFileType.setSelected(false);
+    throttleValue.setText("0");
+  }
+
+  public void save(){ _manager.save(); }
+
+  public String toString(){
+    String str =
+      "_gifFileType   = " + gifFileType.isSelected() + "\n" +
+      "_pngFileType   = " + pngFileType.isSelected() + "\n" +
+      "_throttleValue = " + throttleValue.getText();
+    return str;
+  }
+
+  private static final int       _STD_WIDTH      = 250;
+  private static final int       _STD_JTEXT_COLS = 3;
+  private static final int       _STD_HEIGHT     = 30;
+  private static final Dimension _STD_INPUT_SIZE = new Dimension(_STD_WIDTH, _STD_HEIGHT);
+  private static final String    _GIF            = "GIF images";
+  private static final String    _PNG            = "PNG images";
+
+  private final transient PersistedObject _manager;
+
+  private static JCheckBox _createOptionCheckBox(String text) {
+    JCheckBox checkBox = new JCheckBox();
+    checkBox.setHorizontalTextPosition(SwingConstants.LEFT);
+    checkBox.setPreferredSize(_STD_INPUT_SIZE);
+    checkBox.setText(text);
+    checkBox.setAlignmentX(RIGHT_ALIGNMENT);
+
+    if(text.equals(_GIF)) checkBox.setSelected(true);
+    else checkBox.setSelected(false);
+
+    return checkBox;
+  }
+
+  private JPanel _getThrottleTimeGroup() {
+    final JPanel throttleTimeGroup = _getTextFileGroupPanel();
+
+    JLabel throttleTimeLabel = new JLabel();
+    throttleTimeLabel.setText("Throttle Time");
+    throttleTimeGroup.add(throttleTimeLabel);
+
+    throttleValue.setText("0");
+    throttleTimeGroup.add(throttleValue);
+
+    return throttleTimeGroup;
+  }
+
+  private static JPanel _getTextFileGroupPanel() {
+    JPanel tempPanel = new JPanel();
+    tempPanel.setLayout(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+    tempPanel.setAlignmentX(RIGHT_ALIGNMENT);
+    tempPanel.setPreferredSize(_STD_INPUT_SIZE);
+    return tempPanel;
+  }
+
+  static final class TestSwingComponentGsonifier
+  implements JsonSerializer<TestSwingComponent>, JsonDeserializer<TestSwingComponent>{
+    @Override
+    public TestSwingComponent deserialize(
+      JsonElement jsonElement, Type type, JsonDeserializationContext context
+    ){
+      JsonObject jsonObject = jsonElement.getAsJsonObject();
+      TestSwingComponent newInstance = new TestSwingComponent(null);
+      newInstance.gifFileType.setSelected(jsonObject.get("gifFileType").getAsBoolean());
+      newInstance.pngFileType.setSelected(jsonObject.get("pngFileType").getAsBoolean());
+      newInstance.throttleValue.setText(jsonObject.get("throttleValue").getAsString());
+      return newInstance;
+    }
+
+    @Override
+    public JsonElement serialize(
+      TestSwingComponent srcComponent, Type type, JsonSerializationContext context
+    ){
+      JsonObject jsonObject = new JsonObject();
+      jsonObject.addProperty("gifFileType", srcComponent.gifFileType.isSelected());
+      jsonObject.addProperty("pngFileType", srcComponent.gifFileType.isSelected());
+      jsonObject.addProperty("throttleValue", srcComponent.throttleValue.getText());
+      return jsonObject;
+    }
+  }
 }
