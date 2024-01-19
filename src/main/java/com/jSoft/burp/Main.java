@@ -3,6 +3,7 @@ package com.jSoft.burp;
 import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
 import com.coreyd97.BurpExtenderUtilities.DefaultGsonProvider;
+import com.coreyd97.BurpExtenderUtilities.nameManager.NameCollisionException;
 import com.coreyd97.BurpExtenderUtilities.PersistedList;
 import com.coreyd97.BurpExtenderUtilities.PersistedMap;
 import com.coreyd97.BurpExtenderUtilities.PersistedObject;
@@ -12,6 +13,7 @@ import com.google.gson.JsonDeserializationContext;
 import com.google.gson.JsonDeserializer;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
@@ -26,6 +28,7 @@ import javax.swing.SwingConstants;
 import javax.swing.border.EmptyBorder;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.lang.reflect.Field;
 import java.lang.reflect.Type;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -45,32 +48,42 @@ public class Main implements BurpExtension{
 
     //specify a default value
     PersistedSet<String> set = new PersistedSet<>(
-      api, "testSet", new HashSet<>(),
-      Preferences.Visibility.PROJECT
+      api, "testSet", Preferences.Visibility.PROJECT,
+      new HashSet<>()
     );
 
     //specify a default value and the type to serialize/deserialize as
     PersistedSet<String> oldSet = new PersistedSet<>(
-      api, "oldSet",
-      new TypeToken<HashSet<String>>(){}, new HashSet<>(),
-      Preferences.Visibility.PROJECT
+      api, "oldSet", Preferences.Visibility.PROJECT,
+      new TypeToken<HashSet<String>>(){}, new HashSet<>()
     );
     //oldSet.save();
 
     //specify the type without a default value
     PersistedList<String> lst = new PersistedList<>(
-      api, "testLst", new ArrayList<>(),
-      Preferences.Visibility.PROJECT
+      api, "testLst", Preferences.Visibility.PROJECT,
+      new ArrayList<>()
     );
 
     //specify a default without a type
     PersistedMap<String, String, HashMap<String, String>> map = new PersistedMap<>(
-      api, "testMap", new HashMap<>(),
-      Preferences.Visibility.PROJECT
+      api, "testMap", Preferences.Visibility.PROJECT,
+      new HashMap<>()
     );
 
     //Create a PersistedObject
-    Settings2 settings = new Settings2(api, "settings2", Preferences.Visibility.PROJECT);
+    String persistedName = "settings2";
+    api.logging().logToOutput("persisted settings2 b4 instantiation = " + api.persistence().extensionData().getString(persistedName));
+    //api.persistence().extensionData().deleteString(persistedName);
+    Settings2 settings = new Settings2(api, persistedName, Preferences.Visibility.PROJECT);
+    try{
+      Settings2 badSettings =
+        new Settings2(api, persistedName, Preferences.Visibility.PROJECT);
+    }
+    catch(NameCollisionException e){
+      api.logging().logToOutput("badSettings failed to initialize (that means collision detection is working)");
+    }
+    api.logging().logToOutput("\npersisted settings2 aftr instantiation = " + api.persistence().extensionData().getString(persistedName));
 
     ///////////////////////////////////
     // USING AUTO-PERSISTING OBJECTS //
@@ -108,24 +121,64 @@ public class Main implements BurpExtension{
       settings.save();
     }
 
+    api.logging().logToOutput("\nsettings2 = " + settings.toString());
+    api.logging().logToOutput("\npersisted settings2 = " + api.persistence().extensionData().getString(persistedName));
+
     //////////////////////////////////
     // MULTI-LEVEL PERSISTED OBJECT //
     //////////////////////////////////
-    final boolean CLEAN = true;
+    final boolean CLEAN = false;
+    final boolean RESET = false;
     api.logging().logToOutput(api.persistence().extensionData().getString("extensionSettings"));
     if(CLEAN) api.persistence().extensionData().deleteString("extensionSettings");
 
     ExtensionSettings extSettings = new ExtensionSettings(api, "extensionSettings", Preferences.Visibility.PROJECT);
     if(CLEAN){
-      extSettings.unregister();
-      extSettings.reregister();
+      extSettings.unpersist();
+      extSettings.repersist();
     }
     api.logging().logToError("extSettings = \n" + extSettings);
     boolean subSettings1Enabled = extSettings.subSettings1().enabled();
     extSettings.subSettings1().enabled(!subSettings1Enabled);
     api.logging().logToError("\n\nextSettings = \n" + extSettings);
-  }
-}
+
+    if(RESET){
+      extSettings.reset();
+      api.logging().logToError("\n\nextSettings = \n" + extSettings);
+    }
+
+    /////////////////
+    // NAMESPACING //
+    /////////////////
+    GsonProvider gsonProvider = new GsonProvider();
+    gsonProvider.registerTypeHierarchyAdapter(
+      Path.class, new JsonSerializer<Path>(){
+        @Override
+        public JsonElement serialize(
+          Path path, Type type, JsonSerializationContext context
+        ){
+          return new JsonPrimitive("namespaceTestSerializationWorked");
+        }
+      }
+    );
+
+    api.logging().logToOutput("\n\npersisted namespaceTest b4 instantiation = " + api.persistence().preferences().getString("namespaceTest"));
+    api.logging().logToOutput("\npersisted .namespaceTest b4 instantiation = " + api.persistence().preferences().getString(".namespaceTest"));
+    api.logging().logToOutput("\npersisted MainExtensionNamespace.namespaceTest b4 instantiation = " + api.persistence().preferences().getString("MainExtensionNamespace.namespaceTest"));
+
+    PersistedList<Path> namespaceTest = new PersistedList<>(
+      api, "namespaceTest", Preferences.Visibility.GLOBAL,
+      gsonProvider,
+      new TypeToken<List<Path>>(){}, List.of(Path.of("/namespace/test")),
+      "MainExtensionNamespace"
+    );
+
+    api.logging().logToOutput("\n namespaceTest = " + namespaceTest.toString());
+    api.logging().logToOutput("\npersisted namespaceTest aftr instantiation = " + api.persistence().preferences().getString("namespaceTest"));
+    api.logging().logToOutput("\npersisted .namespaceTest aftr instantiation = " + api.persistence().preferences().getString(".namespaceTest"));
+    api.logging().logToOutput("\npersisted MainExtensionNamespace.namespaceTest aftr instantiation = " + api.persistence().preferences().getString("MainExtensionNamespace.namespaceTest"));
+  }//end initialize()
+}//end class Main
 
 interface PersistedConstituent{
   public void save();
@@ -137,6 +190,8 @@ class GsonProvider extends DefaultGsonProvider{
     super();
     this.registerTypeHierarchyAdapter(Path.class, new PathGsonifier());
     this.registerTypeAdapter(TestSwingComponent.class, new TestSwingComponent.TestSwingComponentGsonifier());
+//    this.registerTypeAdapter(JCheckBox.class, new TestSwingComponent.JCheckBoxGsonifier());
+//    this.registerTypeAdapter(JTextField.class, new TestSwingComponent.JTextFieldGsonifier());
   }
 
   static final class PathGsonifier implements JsonDeserializer<Path>, JsonSerializer<Path>{
@@ -163,7 +218,7 @@ class Settings2 extends PersistedObject{
   private List<Path> inFilePaths   = new ArrayList<>();
 
   public Settings2(MontoyaApi api, String name, Preferences.Visibility vis){
-    super(api, new GsonProvider(), name, vis);
+    super(api, name, vis, new GsonProvider());
     this.register();
     _loadFromPrefs();
   }
@@ -211,7 +266,20 @@ class Settings2 extends PersistedObject{
     return inFilePaths();
   }
 
-  private Settings2(){ super(null, null, null); }
+  public String toString(){
+    String str =
+      "activeEnabled = \n" +
+        activeEnabled + "\n" +
+        "\noutFilePath = \n" +
+        ((outFilePath == null) ? "null" : outFilePath.toString()) + "\n" +
+        "\nprefix = \n" +
+        prefix + "\n" +
+        "\ninFilePaths = \n" +
+        inFilePaths.toString();
+    return str;
+  }
+
+  //private Settings2(){ super(null, null, null); }
 
   private void _loadFromPrefs(){
     Settings2 persistedSelf = _prefs.get(_PERSISTED_NAME);
@@ -228,7 +296,7 @@ class ExtensionSettings extends PersistedObject{
   private TestSwingComponent testComponent = new TestSwingComponent(this);
 
   public ExtensionSettings(MontoyaApi api, String name, Preferences.Visibility vis){
-    super(api, new GsonProvider(), name, vis);
+    super(api, name, vis, new GsonProvider());
     this.register();
     _loadFromPrefs();
   }
@@ -252,7 +320,7 @@ class ExtensionSettings extends PersistedObject{
     return str;
   }
 
-  private ExtensionSettings(){ super(null, null, null); }
+  //private ExtensionSettings(){ super(null, null, null); }
 
   private void _loadFromPrefs(){
     ExtensionSettings persistedSelf = _prefs.get(_PERSISTED_NAME);
@@ -361,7 +429,7 @@ class TestSwingComponent extends JPanel implements PersistedConstituent{
   //public members accessible via functions of same name
   private final JCheckBox  gifFileType = _createOptionCheckBox(_GIF);
   private final JCheckBox  pngFileType = _createOptionCheckBox(_PNG);
-  private final JTextField throttleValue = new JTextField(_STD_JTEXT_COLS);
+  private final JTextField throttleValue = _createTextField(_STD_JTEXT_COLS);
 
   public TestSwingComponent(PersistedObject manager){
     _manager = manager;
@@ -436,6 +504,10 @@ class TestSwingComponent extends JPanel implements PersistedConstituent{
     return checkBox;
   }
 
+  private static JTextField _createTextField(int size){
+    return new JTextField(size);
+  }
+
   private JPanel _getThrottleTimeGroup() {
     final JPanel throttleTimeGroup = _getTextFileGroupPanel();
 
@@ -458,28 +530,52 @@ class TestSwingComponent extends JPanel implements PersistedConstituent{
   }
 
   static final class TestSwingComponentGsonifier
-  implements JsonSerializer<TestSwingComponent>, JsonDeserializer<TestSwingComponent>{
+  implements JsonSerializer<TestSwingComponent>, JsonDeserializer<TestSwingComponent> {
     @Override
-    public TestSwingComponent deserialize(
-      JsonElement jsonElement, Type type, JsonDeserializationContext context
-    ){
-      JsonObject jsonObject = jsonElement.getAsJsonObject();
-      TestSwingComponent newInstance = new TestSwingComponent(null);
-      newInstance.gifFileType.setSelected(jsonObject.get("gifFileType").getAsBoolean());
-      newInstance.pngFileType.setSelected(jsonObject.get("pngFileType").getAsBoolean());
-      newInstance.throttleValue.setText(jsonObject.get("throttleValue").getAsString());
-      return newInstance;
+    public JsonElement serialize(TestSwingComponent src, Type typeOfSrc, JsonSerializationContext context) {
+      JsonObject jsonObject = new JsonObject();
+      for (Field field : TestSwingComponent.class.getDeclaredFields()) {
+        if (!java.lang.reflect.Modifier.isTransient(field.getModifiers())) {
+          field.setAccessible(true);
+          try {
+            if (field.get(src) instanceof JCheckBox) {
+              jsonObject.addProperty(field.getName(), ((JCheckBox) field.get(src)).isSelected());
+            }
+            else if (field.get(src) instanceof JTextField) {
+              jsonObject.addProperty(field.getName(), ((JTextField) field.get(src)).getText());
+            }
+            // Add other types as needed
+          }
+          catch (IllegalAccessException e) {
+            e.printStackTrace(); // Consider proper exception handling
+          }
+        }
+      }
+      return jsonObject;
     }
 
     @Override
-    public JsonElement serialize(
-      TestSwingComponent srcComponent, Type type, JsonSerializationContext context
-    ){
-      JsonObject jsonObject = new JsonObject();
-      jsonObject.addProperty("gifFileType", srcComponent.gifFileType.isSelected());
-      jsonObject.addProperty("pngFileType", srcComponent.gifFileType.isSelected());
-      jsonObject.addProperty("throttleValue", srcComponent.throttleValue.getText());
-      return jsonObject;
+    public TestSwingComponent deserialize(JsonElement json, Type typeOfT, JsonDeserializationContext context) throws JsonParseException {
+      TestSwingComponent component = new TestSwingComponent(null);
+      JsonObject jsonObject = json.getAsJsonObject();
+      for (Field field : TestSwingComponent.class.getDeclaredFields()) {
+        if (!java.lang.reflect.Modifier.isTransient(field.getModifiers())) {
+          field.setAccessible(true);
+          try {
+            if (field.get(component) instanceof JCheckBox) {
+              ((JCheckBox) field.get(component)).setSelected(jsonObject.get(field.getName()).getAsBoolean());
+            }
+            else if (field.get(component) instanceof JTextField) {
+              ((JTextField) field.get(component)).setText(jsonObject.get(field.getName()).getAsString());
+            }
+            // Add other types as needed
+          }
+          catch (IllegalAccessException e) {
+            e.printStackTrace(); // Consider proper exception handling
+          }
+        }
+      }
+      return component;
     }
   }
 }
